@@ -8,7 +8,7 @@ export interface Hotel {
 
 export type NewHotel = Omit<Hotel, 'id'>
 
-const API_BASE = '/api'
+const API_BASE: string = import.meta.env.VITE_API_BASE
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const method = options.method ?? 'GET'

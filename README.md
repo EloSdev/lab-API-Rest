@@ -26,9 +26,30 @@ npm run build      # tsc + vite build; el postbuild copia dist/ a hotels-server/
 
 > Si npm tiene `ignore-scripts=true` (compruébalo con `npm config get ignore-scripts`), el `postbuild` no se ejecuta y hay que copiar a mano: `Copy-Item dist\* ..\hotels-server\front -Recurse -Force` (PowerShell) o `cp -r dist/* ../hotels-server/front/` (bash).
 
+### Cliente en modo desarrollo (otro origen)
+
+La URL base de la API sale de `VITE_API_BASE`, en `client/.env` (Vite solo lee los `.env` de su raíz, `client/`, no los de la raíz del repo):
+
+```
+VITE_API_BASE=http://localhost:3000/api
+```
+
+```bash
+cd client
+npm run dev        # http://localhost:5173 → llama a http://localhost:3000/api (otro origen)
+```
+
 ### Activar CORS
 
-_Pendiente (O3)._
+```bash
+# macOS / Linux
+USE_CORS=yes npm run dev
+
+# Windows (PowerShell)
+$env:USE_CORS="yes"; npm run dev
+```
+
+> Con `USE_CORS=yes` el servidor sirve estáticos desde `public/` (las miniaturas) en lugar de `front/`, así que el cliente construido ya no está en `http://localhost:3000`: hay que usar el de Vite (5173).
 
 ---
 
@@ -135,7 +156,71 @@ Porque el `id` lo decide el **servidor**, que es el dueño del recurso. En `hote
 
 ## O3 · Llamar desde otro origen: CORS
 
-_Pendiente._
+`hotels.api.ts` lee la URL base con `import.meta.env.VITE_API_BASE`. El cliente corre en `http://localhost:5173` (Vite) y la API en `http://localhost:3000`. El puerto es distinto, así que el **origen** es distinto.
+
+### Comprobaciones
+
+**Sin CORS:** al pulsar "Probar CRUD" la consola muestra:
+
+```
+Access to fetch at 'http://localhost:3000/api/hotels' from origin 'http://localhost:5173' has been blocked by CORS policy:
+No 'Access-Control-Allow-Origin' header is present on the requested resource.
+TypeError: Failed to fetch
+```
+
+La petición sí llega al servidor: aparece en el log de `morgan`, y repetida con `curl` (con `-H "Origin: http://localhost:5173"`) responde `200 OK` con los hoteles, pero sin ninguna cabecera `Access-Control-Allow-Origin`. La propia consola lo deja ver: `GET http://localhost:3000/api/hotels net::ERR_FAILED 200 (OK)`.
+
+![Consola sin CORS: la respuesta llega con 200 pero el navegador la bloquea](screenshots/o3-no-cors-console-error.png)
+
+**Con CORS (`USE_CORS=yes`):**
+
+- El primer `GET /api/hotels` funciona (`200`, la consola muestra `1 10`) y entre sus cabeceras de respuesta está `access-control-allow-origin: *`.
+- El POST falla. En Network aparece antes un `OPTIONS /api/hotels` que responde **406**, y el POST queda como `net::ERR_FAILED`: nunca se llega a enviar. La consola muestra:
+
+```
+Access to fetch at 'http://localhost:3000/api/hotels' from origin 'http://localhost:5173' has been blocked by CORS policy:
+Response to preflight request doesn't pass access control check: No 'Access-Control-Allow-Origin' header is present on the requested resource.
+```
+
+![Consola con CORS: el preflight falla y el POST no se envía](screenshots/o3-cors-console-preflight-error.png)
+
+![Network con CORS: GET 200, POST con CORS error y el preflight OPTIONS con 406](screenshots/o3-cors-network-options-406.png)
+
+![Detalle del preflight: OPTIONS, 406 Not Acceptable, Accept */* y sin Access-Control-Allow-Origin](screenshots/o3-cors-options-406-headers.png)
+
+Cabeceras de esa petición `OPTIONS` (preflight):
+
+| Petición | Respuesta (406) |
+|---|---|
+| `accept: */*`<br>`access-control-request-method: POST`<br>`access-control-request-headers: content-type`<br>`origin: http://localhost:5173` | `content-type: application/json`<br>Sin ninguna cabecera `access-control-allow-*` |
+
+### 📝 Respuestas
+
+**¿Quién bloquea la respuesta en la comprobación 1: el servidor o el navegador? ¿Por qué `curl` no tenía este problema en O1?**
+
+El **navegador**. El servidor recibe la petición, la procesa y responde `200` con los datos: se ve en su log y repitiéndola con `curl`. Lo que pasa es que la respuesta no trae `Access-Control-Allow-Origin`. Por la política del mismo origen, el navegador no deja que el JavaScript de `http://localhost:5173` lea una respuesta de `http://localhost:3000` si el servidor no lo autoriza explícitamente, así que descarta la respuesta y hace que `fetch` rechace con `TypeError: Failed to fetch`.
+
+`curl` no es un navegador: no ejecuta código de terceros ni tiene un "origen" que proteger, así que no aplica CORS. Muestra la respuesta tal cual. CORS no protege al servidor; protege al usuario del navegador, para que una página no lea con sus credenciales datos de otro sitio.
+
+**¿Por qué el GET no necesita esa petición `OPTIONS` y el POST sí?**
+
+Porque el GET es una **petición simple**: usa el método `GET` y solo cabeceras de la lista segura (`Accept` lo es). El navegador la envía directamente y después comprueba `Access-Control-Allow-Origin` en la respuesta.
+
+El POST lleva `Content-Type: application/json`. `Content-Type` solo cuenta como cabecera segura con `text/plain`, `multipart/form-data` o `application/x-www-form-urlencoded`. Con `application/json`, el navegador primero pregunta al servidor con un **preflight**: un `OPTIONS` al mismo endpoint con `Access-Control-Request-Method: POST` y `Access-Control-Request-Headers: content-type`. Solo si el servidor responde que lo permite (`Access-Control-Allow-Origin`, `-Methods` y `-Headers`) se envía el POST de verdad.
+
+**Explicad el error del POST. ¿Por qué responde 406 a la petición `OPTIONS`?**
+
+El error dice *"Response to preflight request doesn't pass access control check: No 'Access-Control-Allow-Origin' header is present"*. El problema no está en el POST, que ni se llega a enviar, sino en la respuesta al **preflight**: no trae las cabeceras CORS, así que el navegador considera que el servidor no autoriza la petición y la cancela.
+
+El motivo está en el **orden de los middlewares** de `hotels-server/src/index.ts`:
+
+```ts
+app.use('/api', checkContentTypeJSON);   // 1º: exige Accept: application/json
+...
+app.use("/api", cors());                 // 2º: añade las cabeceras CORS y responde los OPTIONS
+```
+
+El preflight lo construye el navegador, que envía `Accept: */*`; nuestro código no puede añadirle cabeceras. `checkContentTypeJSON` (en `middleware.ts`) se ejecuta antes, ve que `Accept` no es exactamente `application/json` y responde `406` sin llamar a `next()`. Por eso `cors()` nunca llega a ejecutarse: ni añade `Access-Control-Allow-Origin` ni responde al `OPTIONS`. El GET funciona porque sí lleva `Accept: application/json`, así que pasa el primer middleware y llega a `cors()`. La solución (desafío D1) sería registrar `cors()` antes de la comprobación del `Accept`, o hacer que esa comprobación deje pasar las peticiones `OPTIONS`.
 
 ## O4 · Gestionar varias peticiones
 
@@ -149,7 +234,7 @@ _Pendiente._
 
 - [x] O1 · Explorar la API antes de programar
 - [x] O2 · Un cliente con fetch
-- [ ] O3 · Llamar desde otro origen: CORS
+- [x] O3 · Llamar desde otro origen: CORS
 - [ ] O4 · Gestionar varias peticiones
 - [ ] O5 · README + bitácora de IA (capturas incluidas)
 
