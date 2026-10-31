@@ -8,9 +8,14 @@ export interface Hotel {
 
 export type NewHotel = Omit<Hotel, 'id'>
 
+export interface City {
+  id: string
+  name: string
+}
+
 const API_BASE: string = import.meta.env.VITE_API_BASE
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+export async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const method = options.method ?? 'GET'
   const url = `${API_BASE}${path}`
 
@@ -35,7 +40,9 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return body.data
 }
 
-export const getHotels = (): Promise<Hotel[]> => request<Hotel[]>('/hotels')
+export const getHotels = (signal?: AbortSignal): Promise<Hotel[]> => request<Hotel[]>('/hotels', { signal })
+
+export const getCities = (): Promise<City[]> => request<City[]>('/cities')
 
 // The server answers a missing hotel with 200 and `{}` (no `data`) instead of a 404
 export const getHotel = async (id: string): Promise<Hotel | null> => {

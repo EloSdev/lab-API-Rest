@@ -224,7 +224,57 @@ El preflight lo construye el navegador, que envía `Accept: */*`; nuestro códig
 
 ## O4 · Gestionar varias peticiones
 
-_Pendiente._
+Servidor sin CORS y cliente construido y servido desde `http://localhost:3000` (modo de O2). Hay tres botones nuevos en [`client/src/main.ts`](client/src/main.ts) que pintan el resultado en un `<pre>`. En `hotels.api.ts` se ha añadido:
+
+- `getCities()`;
+- un `signal` opcional en `getHotels(signal?)`;
+- `export` en `request`, para pedir `/nope` pasando por la misma comprobación de `response.ok`.
+
+- **Cargar todo:** pide hoteles y ciudades con `Promise.all([getHotels(), getCities()])` y luego lo mismo con dos `await` seguidos. Mide los dos casos con `performance.now()`.
+- **Cargar con fallo:** añade `request('/nope')`, primero con `Promise.all` y después con `Promise.allSettled`, y muestra cuáles han ido bien y cuáles no.
+- **Recargar:** antes de pedir los hoteles, aborta la petición anterior (`reloadController?.abort()`) y crea un `AbortController` nuevo. Si la petición termina con un `AbortError`, se ignora (`return`), porque la cancelación la hemos provocado nosotros. Cualquier otro error se muestra.
+
+### Comprobaciones
+
+**Cargar todo.** En `localhost`, sin limitar la red, la diferencia no se aprecia (unos 20–25 ms en los dos casos, e incluso gana a veces la secuencial porque va segunda): no hay latencia que solapar. Con la red en **Slow 4G**:
+
+| | Tiempo |
+|---|---|
+| En paralelo (`Promise.all`) | ~595–640 ms (lo que tarda **la más lenta**) |
+| Una detrás de otra (`await`) | ~1180 ms (la **suma** de las dos) |
+
+En Network, las dos primeras peticiones (`hotels` y `cities`) empiezan a la vez y sus barras se solapan. En la versión secuencial, `cities` no empieza hasta que acaba `hotels`. Los `304` de la segunda tanda son la caché HTTP (el servidor manda `ETag`).
+
+![Cargar todo con Slow 4G: dos peticiones solapadas y dos en secuencia](screenshots/o4-load-all-waterfall.png)
+
+**Cargar con fallo.** `/api/nope` pasa el middleware del `Accept`, pero no hay ninguna ruta para ella y Express responde `404`. Con `Promise.all` no se muestra ningún resultado: en cuanto una promesa rechaza, `Promise.all` rechaza entera y se va al `catch`, aunque hoteles y ciudades hayan llegado bien. Con `Promise.allSettled` se ven las tres:
+
+```
+Promise.all: no se muestra nada, va directo al catch → GET http://localhost:3000/api/nope failed with status 404
+Promise.allSettled:
+  ✅ hoteles: 10
+  ✅ ciudades: 5
+  ❌ /api/nope: GET http://localhost:3000/api/nope failed with status 404
+```
+
+![Cargar con fallo: Promise.all frente a Promise.allSettled](screenshots/o4-load-failure-all-vs-allsettled.png)
+
+**Recargar.** Con la red en **3G** y cinco clics seguidos, las cuatro primeras peticiones aparecen como **`(canceled)`** y solo la última termina con `200`. En la página solo se pinta `Recarga #5: 10 hoteles` y en la consola no aparece ningún error.
+
+![Recargar cinco veces con 3G: cuatro peticiones (canceled) y la última 200](screenshots/o4-reload-canceled.png)
+
+### 📝 Respuestas
+
+**En una pantalla que necesita hoteles y ciudades para funcionar, ¿usaríais `Promise.all` o `Promise.allSettled`? ¿Y en un panel con varios bloques independientes (el tiempo, las noticias, la bolsa)?**
+
+- **Pantalla que necesita hoteles y ciudades: `Promise.all`.** Si falta cualquiera de los dos datos, la pantalla no puede funcionar, así que tiene sentido el "todo o nada": `Promise.all` falla en cuanto falla una de las peticiones y basta con un único `catch` que muestre un error para toda la pantalla. Con `allSettled` habría que comprobar resultado por resultado para acabar mostrando ese mismo error.
+- **Panel de bloques independientes: `Promise.allSettled`.** Que falle la bolsa no debe impedir mostrar el tiempo y las noticias. `allSettled` espera a todas y devuelve el estado de cada una, de modo que cada bloque pinta sus datos o su propio mensaje de error.
+
+**¿Dónde habéis usado ya un `AbortController` en este curso? (Laboratorio 4, O3). ¿Para qué servía allí?**
+
+En el laboratorio 4 (O3, "Cargar los cafés con useEffect") se usó en el `useEffect` que carga los cafés, en `core/coffees/hooks.ts`. El efecto crea un `AbortController`, pasa su `signal` a `getCoffees` y devuelve `() => controller.abort()` como **función de limpieza**. Allí servía para **cancelar la petición cuando el componente se desmonta**, para que su respuesta no actualizase el estado de un componente que ya no está en pantalla. Por eso antes de llamar a `setError` o `setLoading` se comprueba `controller.signal.aborted`. En desarrollo se veía en Network una primera petición `(canceled)`, porque StrictMode monta, desmonta y vuelve a montar el componente a propósito.
+
+Aquí la idea es la misma, pero lo que provoca la cancelación cambia. Allí la provocaba React al desmontar; aquí la provoca un clic nuevo en "Recargar". En los dos casos sirve para **descartar una petición cuya respuesta ya no interesa**. Así se evita una carrera: si la respuesta antigua llegase después de la nueva, pintaría datos viejos encima de los actuales. También en los dos casos la cancelación no se trata como un error: allí se comprueba `signal.aborted` y aquí se ignora el `AbortError`. `abort()` hace que el `fetch` rechace y el navegador corta la conexión, por eso aparece como `(canceled)` en Network.
 
 ---
 
@@ -235,7 +285,7 @@ _Pendiente._
 - [x] O1 · Explorar la API antes de programar
 - [x] O2 · Un cliente con fetch
 - [x] O3 · Llamar desde otro origen: CORS
-- [ ] O4 · Gestionar varias peticiones
+- [x] O4 · Gestionar varias peticiones
 - [ ] O5 · README + bitácora de IA (capturas incluidas)
 
 ### Opcionales
