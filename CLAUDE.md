@@ -31,7 +31,7 @@ cd client; npm run build
 
 Type-check only: `npx tsc` in `client/` (`noEmit`). The server has no build/typecheck script; use `npx tsc --noEmit` in `hotels-server/`.
 
-`client`'s `postbuild` uses `cp -r`, a POSIX command — it may fail under npm's default Windows shell (cmd.exe). `hotels-server/front/assets/` also accumulates old hashed bundles because nothing cleans it.
+On this machine npm has `ignore-scripts=true`, so `client`'s `postbuild` (`cp -r dist/ ../hotels-server/front`) never runs. After `npm run build`, copy manually: `Copy-Item dist\* ..\hotels-server\front -Recurse -Force` (from `client/`). Don't change the npm setting. `hotels-server/front/assets/` accumulates old hashed bundles because nothing cleans it.
 
 ## Server architecture (`hotels-server/src`)
 

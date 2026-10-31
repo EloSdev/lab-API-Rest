@@ -16,7 +16,15 @@ npm run dev        # http://localhost:3000
 
 ### Cliente
 
-_Pendiente (O2/O3)._
+El cliente se construye y lo sirve el propio servidor (mismo origen, `http://localhost:3000`):
+
+```bash
+cd client
+npm install
+npm run build      # tsc + vite build; el postbuild copia dist/ a hotels-server/front
+```
+
+> Si npm tiene `ignore-scripts=true` (compruébalo con `npm config get ignore-scripts`), el `postbuild` no se ejecuta y hay que copiar a mano: `Copy-Item dist\* ..\hotels-server\front -Recurse -Force` (PowerShell) o `cp -r dist/* ../hotels-server/front/` (bash).
 
 ### Activar CORS
 
@@ -79,7 +87,51 @@ Que la respuesta se puede ampliar sin romper el contrato. Si mañana hace falta 
 
 ## O2 · Un cliente con fetch
 
-_Pendiente._
+Código en [`client/src/hotels.api.ts`](client/src/hotels.api.ts) y [`client/src/main.ts`](client/src/main.ts).
+
+- **Modelo:** `Hotel` solo tiene los 5 campos que usa el front (`id`, `name`, `city`, `lowRate`, `highRate`), y `NewHotel = Omit<Hotel, "id">`.
+- **`request<T>(path, options)`** concentra lo que se repite en todas las llamadas:
+  - Añade siempre `Accept: application/json`, y `Content-Type: application/json` solo cuando hay `body`.
+  - Si `response.ok` es `false`, lanza `Error("<MÉTODO> <URL> failed with status <código>")`.
+  - Con un `204` no lee el cuerpo y devuelve `undefined`.
+  - Si no, devuelve `body.data`.
+- **`getHotel(id)` devuelve `null` si el hotel no existe.** Como vimos en O1, el servidor responde `200` con `{}` y no un 404. Por eso no se puede detectar con el código de estado: `request` devuelve `body.data`, que es `undefined` cuando falta, y `getHotel` lo convierte en `null` (`hotel ?? null`).
+- **Botón "Probar CRUD"** en `main.ts`: ejecuta el recorrido del enunciado, y si algo falla el error se muestra con `console.error`.
+
+### Comprobaciones
+
+Con el cliente servido en `http://localhost:3000`, al pulsar "Probar CRUD" la consola muestra:
+
+```
+1 10
+2 Hotel Tueste ef4ff351-0a12-4b32-9ab9-85b618cfd567
+3 Hotel Tueste
+4 95
+5 null
+6 10
+```
+
+En Network (Fetch/XHR) aparecen, en orden: `GET /api/hotels` 200, `POST /api/hotels` **201**, `GET /api/hotels/:id` 200, `PUT /api/hotels/:id` 200, `DELETE /api/hotels/:id` **204**, `GET /api/hotels/:id` 200 y `GET /api/hotels` 200. El Payload del POST es exactamente el JSON enviado: `{"name":"Hotel Tueste","city":"Seattle","lowRate":90,"highRate":120}`, sin `id`.
+
+Al quitar el `Accept` de `request`, la consola muestra `Error: GET /api/hotels failed with status 406` y no un `undefined` silencioso. Como el recorrido es secuencial (`await` tras `await`), la primera petición que falla corta el resto: no llega a hacer el POST.
+
+### 📝 Respuestas
+
+**`fetch` no lanza un error con un 404 o un 500. ¿Cuándo sí lanza? ¿Qué pasaría en vuestra aplicación si no comprobaseis `response.ok`?**
+
+`fetch` solo rechaza la promesa cuando **no hay respuesta HTTP** que entregar:
+- un fallo de red (servidor caído, sin conexión, DNS que no resuelve);
+- una petición bloqueada por CORS;
+- una petición cancelada con un `AbortController` (`AbortError`);
+- una URL o unas opciones inválidas.
+
+Si el servidor responde, aunque sea con un 404 o un 500, para `fetch` la petición "ha ido bien": resuelve con un `Response` que tiene `ok === false` y el código en `status`.
+
+Sin comprobar `response.ok`, el código seguiría como si todo hubiera ido bien. Leería el cuerpo de error (por ejemplo `{"error":"Not Acceptable"}` en un 406) y devolvería su `data`, es decir, `undefined`. El fallo saltaría más tarde y lejos de su causa: en nuestro botón, `(await getHotels()).length` daría `TypeError: Cannot read properties of undefined (reading 'length')`, sin ninguna pista de que el problema real era un 406 del servidor.
+
+**¿Por qué `createHotel` no envía el `id`? ¿Quién lo decide?**
+
+Porque el `id` lo decide el **servidor**, que es el dueño del recurso. En `hotel.repo.ts`, `create()` le asigna `crypto.randomUUID()` (además de `created` y `modified`), y lo hace después de copiar los datos recibidos, así que un `id` enviado por el cliente se sobrescribiría igualmente. El cliente no puede garantizar que un identificador sea único entre todos los clientes, y el servidor sí. Por eso el tipo `NewHotel = Omit<Hotel, "id">` impide en tiempo de compilación pasar un `id`, y el cliente lo conoce leyendo la respuesta del `POST` (`201` con el hotel creado).
 
 ## O3 · Llamar desde otro origen: CORS
 
@@ -96,7 +148,7 @@ _Pendiente._
 ### Obligatorios
 
 - [x] O1 · Explorar la API antes de programar
-- [ ] O2 · Un cliente con fetch
+- [x] O2 · Un cliente con fetch
 - [ ] O3 · Llamar desde otro origen: CORS
 - [ ] O4 · Gestionar varias peticiones
 - [ ] O5 · README + bitácora de IA (capturas incluidas)
